@@ -11,9 +11,8 @@ import (
 type responses map[string]int
 
 type summary struct {
-	identifier int
-	times      int
-	codes      responses
+	times int
+	codes responses
 }
 
 var parallelness = flag.Int("parallel", 8, "How many workers to make")
@@ -27,12 +26,22 @@ func main() {
 		fmt.Printf("Error parsing duration: %s\n", err)
 		os.Exit(1)
 	}
+	uri := flag.Arg(0)
+	if uri == "" {
+		fmt.Printf("give a url at the end")
+		os.Exit(1)
+	}
+
+	if _, err := makeRequest(uri); err != nil {
+		fmt.Printf("Aborting: %s\n", err)
+		os.Exit(1)
+	}
 
 	stop := make(chan bool)
 	summaries := make(chan summary, nparallel)
 
 	for i := 0; i < nparallel; i++ {
-		go hammer(i, summaries, stop)
+		go hammer(uri, summaries, stop)
 	}
 
 	fmt.Printf("Working for %s...\n", runFor.String())
@@ -45,7 +54,7 @@ func main() {
 	responseTotals := make(responses)
 	for i := 0; i < nparallel; i++ {
 		s := <-summaries
-		fmt.Printf("%d did %d iterations. responses: %+v\n", s.identifier, s.times, s.codes)
+		fmt.Printf("%d iterations. responses: %+v\n", s.times, s.codes)
 		totalTimes += s.times
 		for status, count := range s.codes {
 			responseTotals[status] += count
@@ -54,9 +63,9 @@ func main() {
 	fmt.Printf("did %d total runs: %+v\n", totalTimes, responseTotals)
 }
 
-func hammer(identifier int, summaries chan summary, stop chan bool) {
+func hammer(uri string, summaries chan summary, stop chan bool) {
 	var times int
-	s := summary{identifier: identifier}
+	s := summary{}
 	s.codes = make(responses)
 	for {
 		select {
@@ -66,19 +75,26 @@ func hammer(identifier int, summaries chan summary, stop chan bool) {
 			return
 		default:
 			times++
-			client := &http.Client{}
-			req, err := http.NewRequest("GET", "http://localhost:8080/metrics", nil)
+			resp, err := makeRequest(uri)
 			if err != nil {
-				fmt.Printf("%d: error creating request: %s\n", identifier, err)
-				continue
-			}
-			req.Header.Add("User-Agent", fmt.Sprintf("Plush worker %d", identifier))
-			resp, err := client.Do(req)
-			if err != nil {
-				fmt.Printf("%d: performing response: %s\n", identifier, err)
+				fmt.Printf("Error on request: %s\n", err)
 				continue
 			}
 			s.codes[resp.Status]++
 		}
 	}
+}
+
+func makeRequest(uri string) (*http.Response, error) {
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("User-Agent", "Plush")
+	resp, err := client.Do(req)
+	if err != nil {
+		return resp, err
+	}
+	return resp, err
 }
