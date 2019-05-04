@@ -1,68 +1,84 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"sync"
+	"net/http"
+	"os"
 	"time"
 )
 
+type responses map[string]int
+
 type summary struct {
 	identifier int
-	took       time.Duration
-	message    string
+	times      int
+	codes      responses
 }
 
+var parallelness = flag.Int("parallel", 8, "How many workers to make")
+var runTime = flag.String("runtime", "1s", "Duration to run all workers, eg 1m")
+
 func main() {
-	nparallel := 3
+	flag.Parse()
+	nparallel := *parallelness
+	runFor, err := time.ParseDuration(*runTime)
+	if err != nil {
+		fmt.Printf("Error parsing duration: %s\n", err)
+		os.Exit(1)
+	}
+
 	stop := make(chan bool)
-	summaries := make(chan summary)
+	summaries := make(chan summary, nparallel)
 
 	for i := 0; i < nparallel; i++ {
-		fmt.Printf("starting id %d\n", i)
 		go hammer(i, summaries, stop)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(nparallel)
-	for i := 0; i < nparallel; i++ {
-		go report(summaries, &wg)
-	}
-
-	fmt.Println("waiting until defined time...")
-	time.Sleep(1 * time.Second)
-	fmt.Println("shutting them all down now.")
+	fmt.Printf("Working for %s...\n", runFor.String())
+	time.Sleep(runFor)
 	for i := 0; i < nparallel; i++ {
 		stop <- true
 	}
-	// great. now you need to wait for all the report goroutines to finish.
-	wg.Wait()
-	fmt.Println("exiting main")
+
+	var totalTimes int
+	responseTotals := make(responses)
+	for i := 0; i < nparallel; i++ {
+		s := <-summaries
+		fmt.Printf("%d did %d iterations. responses: %+v\n", s.identifier, s.times, s.codes)
+		totalTimes += s.times
+		for status, count := range s.codes {
+			responseTotals[status] += count
+		}
+	}
+	fmt.Printf("did %d total runs: %+v\n", totalTimes, responseTotals)
 }
 
 func hammer(identifier int, summaries chan summary, stop chan bool) {
-	start := time.Now()
 	var times int
+	s := summary{identifier: identifier}
+	s.codes = make(responses)
 	for {
 		select {
 		case <-stop:
-			message := fmt.Sprintf("did %d iterations", times)
-			s := summary{
-				identifier: identifier,
-				took:       time.Since(start),
-				message:    message,
-			}
-			fmt.Printf("%d returning\n", identifier)
+			s.times = times
 			summaries <- s
 			return
 		default:
 			times++
+			client := &http.Client{}
+			req, err := http.NewRequest("GET", "http://localhost:8080/metrics", nil)
+			if err != nil {
+				fmt.Printf("%d: error creating request: %s\n", identifier, err)
+				continue
+			}
+			req.Header.Add("User-Agent", fmt.Sprintf("Plush worker %d", identifier))
+			resp, err := client.Do(req)
+			if err != nil {
+				fmt.Printf("%d: performing response: %s\n", identifier, err)
+				continue
+			}
+			s.codes[resp.Status]++
 		}
 	}
-}
-
-func report(s chan summary, wg *sync.WaitGroup) {
-	defer wg.Done()
-	fmt.Println("waiting for summary")
-	smry := <-s
-	fmt.Printf("%d %s\n", smry.identifier, smry.message)
 }
