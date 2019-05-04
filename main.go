@@ -9,28 +9,37 @@ import (
 	"time"
 )
 
+func usage() {
+	fmt.Fprintf(flag.CommandLine.Output(),
+		"Usage: %s [options] http://url.to.hammer/path\nOptions:\n",
+		os.Args[0])
+	flag.PrintDefaults()
+	os.Exit(1)
+}
+
+var parallelness = flag.Int("parallel", 1, "How many workers to make")
+var runTime = flag.String("duration", "1s", "Duration to run all workers, eg 1m")
+
 type responses map[string]int
 
 type summary struct {
-	times int
-	codes responses
+	times  int
+	errors int
+	codes  responses
 }
 
-var parallelness = flag.Int("parallel", 8, "How many workers to make")
-var runTime = flag.String("runtime", "1s", "Duration to run all workers, eg 1m")
-
 func main() {
+	flag.Usage = usage
 	flag.Parse()
 	nparallel := *parallelness
 	runFor, err := time.ParseDuration(*runTime)
 	if err != nil {
 		fmt.Printf("Error parsing duration: %s\n", err)
-		os.Exit(1)
+		flag.Usage()
 	}
 	uri := flag.Arg(0)
 	if uri == "" {
-		fmt.Printf("give a url at the end")
-		os.Exit(1)
+		flag.Usage()
 	}
 
 	if _, err := makeRequest(uri); err != nil {
@@ -68,7 +77,7 @@ func main() {
 	responseTotals := make(responses)
 	for i := 0; i < nparallel; i++ {
 		s := <-summaries
-		fmt.Printf("%d iterations. responses: %+v\n", s.times, s.codes)
+		fmt.Printf("%d iterations with %d errors. responses: %+v\n", s.times, s.errors, s.codes)
 		totalTimes += s.times
 		for status, count := range s.codes {
 			responseTotals[status] += count
@@ -81,13 +90,14 @@ func main() {
 }
 
 func hammer(uri string, summaries chan summary, stop chan bool) {
-	var times int
+	var times, errcount int
 	s := summary{}
 	s.codes = make(responses)
 	for {
 		select {
 		case <-stop:
 			s.times = times
+			s.errors = errcount
 			summaries <- s
 			return
 		default:
@@ -95,6 +105,7 @@ func hammer(uri string, summaries chan summary, stop chan bool) {
 			resp, err := makeRequest(uri)
 			if err != nil {
 				fmt.Printf("Error on request: %s\n", err)
+				errcount++
 				continue
 			}
 			s.codes[resp.Status]++
