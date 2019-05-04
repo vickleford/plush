@@ -44,7 +44,7 @@ func main() {
 		go hammer(uri, summaries, stop)
 	}
 
-	fmt.Printf("Working for %s...\n", runFor.String())
+	fmt.Printf("Starting %d workers for %s...\n", nparallel, runFor.String())
 	time.Sleep(runFor)
 	for i := 0; i < nparallel; i++ {
 		stop <- true
