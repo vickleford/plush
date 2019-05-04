@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 )
 
@@ -40,15 +41,28 @@ func main() {
 	stop := make(chan bool)
 	summaries := make(chan summary, nparallel)
 
+	fmt.Printf("Starting %d workers for %s...\n", nparallel, runFor.String())
+	timebegin := time.Now()
 	for i := 0; i < nparallel; i++ {
 		go hammer(uri, summaries, stop)
 	}
 
-	fmt.Printf("Starting %d workers for %s...\n", nparallel, runFor.String())
-	time.Sleep(runFor)
-	for i := 0; i < nparallel; i++ {
-		stop <- true
-	}
+	go func() {
+		time.Sleep(runFor)
+		for i := 0; i < nparallel; i++ {
+			stop <- true
+		}
+	}()
+
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	go func() {
+		<-interrupt
+		fmt.Println("shutting down gracefully")
+		for i := 0; i < nparallel; i++ {
+			stop <- true
+		}
+	}()
 
 	var totalTimes int
 	responseTotals := make(responses)
@@ -60,7 +74,10 @@ func main() {
 			responseTotals[status] += count
 		}
 	}
-	fmt.Printf("did %d total runs: %+v\n", totalTimes, responseTotals)
+	fmt.Printf("did %d total runs in %s\n", totalTimes, time.Since(timebegin))
+	for status, count := range responseTotals {
+		fmt.Printf("\t%d %s\n", count, status)
+	}
 }
 
 func hammer(uri string, summaries chan summary, stop chan bool) {
