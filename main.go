@@ -73,17 +73,22 @@ func main() {
 		}
 	}()
 
-	var totalTimes int
+	var totalTimes, totalErrors int
 	responseTotals := make(responses)
 	for i := 0; i < nparallel; i++ {
 		s := <-summaries
 		fmt.Printf("%d iterations with %d errors. responses: %+v\n", s.times, s.errors, s.codes)
 		totalTimes += s.times
+		totalErrors += s.errors
 		for status, count := range s.codes {
 			responseTotals[status] += count
 		}
 	}
-	fmt.Printf("did %d total runs in %s\n", totalTimes, time.Since(timebegin))
+	fmt.Printf("did %d total runs with %d accumulated errors in %s\n",
+		totalTimes,
+		totalErrors,
+		time.Since(timebegin),
+	)
 	for status, count := range responseTotals {
 		fmt.Printf("\t%d %s\n", count, status)
 	}
@@ -115,6 +120,7 @@ func hammer(uri string, summaries chan summary, stop chan bool) {
 
 func makeRequest(uri string) (*http.Response, error) {
 	client := &http.Client{}
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		return nil, err
@@ -124,5 +130,6 @@ func makeRequest(uri string) (*http.Response, error) {
 	if err != nil {
 		return resp, err
 	}
+	defer resp.Body.Close()
 	return resp, err
 }
